@@ -1,69 +1,141 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState, useEffect } from "react";
+import Link from "next/link";
+import TaskList from "@/components/TaskList";
+import Loading from "@/components/Loading";
+import ErrorMessage from "@/components/ErrorMessage";
+import { fetchTasks, updateTask, deleteTask } from "@/lib/api";
+
+export default function DashboardPage() {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [filter, setFilter] = useState("all"); // "all" | "active" | "completed"
+
+  // Fetch tasks on component mount
+  const loadTasks = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await fetchTasks();
+      setTasks(data);
+    } catch (err) {
+      setError(err.message || "Failed to load tasks from server.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTasks();
+  }, []);
+
+  // Toggle a task's completed status
+  const handleToggle = async (id) => {
+    const task = tasks.find((t) => t._id === id);
+    if (!task) return;
+
+    try {
+      const updated = await updateTask(id, { completed: !task.completed });
+      setTasks((prev) => prev.map((t) => (t._id === id ? updated : t)));
+    } catch (err) {
+      alert(`Error updating task: ${err.message}`);
+    }
+  };
+
+  // Delete a task
+  const handleDelete = async (id) => {
+    if (!confirm("Are you sure you want to delete this task?")) return;
+
+    try {
+      await deleteTask(id);
+      setTasks((prev) => prev.filter((t) => t._id !== id));
+    } catch (err) {
+      alert(`Error deleting task: ${err.message}`);
+    }
+  };
+
+  // Filter tasks based on the selected tab
+  const filteredTasks = tasks.filter((task) => {
+    if (filter === "active") return !task.completed;
+    if (filter === "completed") return task.completed;
+    return true;
+  });
+
+  // Counts for the filter tabs
+  const counts = {
+    all: tasks.length,
+    active: tasks.filter((t) => !t.completed).length,
+    completed: tasks.filter((t) => t.completed).length,
+  };
+
+  const tabs = [
+    { key: "all", label: "All" },
+    { key: "active", label: "Active" },
+    { key: "completed", label: "Completed" },
+  ];
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.js
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div>
+      {/* Page header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Task Manager</h1>
+          <p className="text-muted text-sm mt-1">
+            {counts.all} total · {counts.active} active · {counts.completed}{" "}
+            completed
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+        <Link
+          href="/tasks/new"
+          className="bg-primary hover:bg-primary-hover text-white px-5 py-2.5 rounded-lg text-sm font-medium"
+        >
+          + Add Task
+        </Link>
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-lg w-fit">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setFilter(tab.key)}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              filter === tab.key
+                ? "bg-card-bg text-foreground shadow-sm"
+                : "text-secondary hover:text-foreground"
+            }`}
           >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            {tab.label} ({counts[tab.key]})
+          </button>
+        ))}
+      </div>
+
+      {/* Error state */}
+      {error && (
+        <div className="mb-6">
+          <ErrorMessage message={error} />
+          <button
+            onClick={loadTasks}
+            className="mt-3 text-sm text-primary hover:underline font-medium"
           >
-            Documentation
-          </a>
+            Try reloading
+          </button>
         </div>
-      </main>
+      )}
+
+      {/* Loading state */}
+      {loading ? (
+        <Loading message="Loading your tasks from MongoDB..." />
+      ) : (
+        /* Task list */
+        <TaskList
+          tasks={filteredTasks}
+          onToggle={handleToggle}
+          onDelete={handleDelete}
+        />
+      )}
     </div>
   );
 }
