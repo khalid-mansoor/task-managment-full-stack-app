@@ -24,10 +24,9 @@ export default function TaskDetailPage() {
 
     const loadTask = async () => {
       try {
-        setFetching(true);
-        setFetchError(null);
         const data = await fetchTask(id);
         setTask(data);
+        setFetchError(null);
       } catch (err) {
         setFetchError(err.message || "Task not found");
       } finally {

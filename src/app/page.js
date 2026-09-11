@@ -13,8 +13,7 @@ export default function DashboardPage() {
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("all"); // "all" | "active" | "completed"
 
-  // Fetch tasks on component mount
-  const loadTasks = async () => {
+  const handleReload = async () => {
     try {
       setLoading(true);
       setError(null);
@@ -28,7 +27,28 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    loadTasks();
+    let isMounted = true;
+    async function getTasks() {
+      try {
+        const data = await fetchTasks();
+        if (isMounted) {
+          setTasks(data);
+          setError(null);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setError(err.message || "Failed to load tasks from server.");
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    }
+    getTasks();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Toggle a task's completed status
@@ -117,7 +137,7 @@ export default function DashboardPage() {
         <div className="mb-6">
           <ErrorMessage message={error} />
           <button
-            onClick={loadTasks}
+            onClick={handleReload}
             className="mt-3 text-sm text-primary hover:underline font-medium"
           >
             Try reloading
