@@ -1,0 +1,73 @@
+name: Build and deploy Node.js app to Azure Web App - khalid-task-manager-web
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js application
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+        run: npm run build
+
+      - name: Prepare standalone application
+        run: |
+          cp -r public .next/standalone/
+          cp -r .next/static .next/standalone/.next/
+
+      - name: Upload standalone artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-standalone
+          path: .next/standalone
+
+  deploy:
+    runs-on: ubuntu-latest
+
+    needs: build
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download standalone artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nextjs-standalone
+          path: .
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_6FB510C5880B40219DF4B8F984F51CE1 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_65D07BFCF9AF46F48E9EBCDC335F9707 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_532558D6DDF7493E83575E0417945DC6 }}
+
+      - name: Deploy standalone application
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: khalid-task-manager-web
+          slot-name: Production
+          package: .
