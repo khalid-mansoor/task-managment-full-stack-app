@@ -21,7 +21,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24.x'
-          cache: 'npm'
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -29,20 +29,14 @@ jobs:
       - name: Build Next.js application
         run: npm run build
 
-      - name: Verify Next.js installation
-        run: |
-          test -x node_modules/.bin/next
-          node_modules/.bin/next --version
+      - name: Remove node_modules
+        run: rm -rf node_modules
 
       - name: Upload application
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: |
-            .
-            !.git
-            !.github
-            !node_modules/.cache
+          path: .
 
   deploy:
     runs-on: ubuntu-latest
@@ -68,6 +62,6 @@ jobs:
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
-          app-name: 'khalid-task-manager-web'
-          slot-name: 'Production'
+          app-name: khalid-task-manager-web
+          slot-name: Production
           package: .
