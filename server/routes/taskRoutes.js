@@ -1,13 +1,16 @@
+
 const express = require("express");
 const mongoose = require("mongoose");
 const Task = require("../models/Task");
-const { upload, removeUploadedFile } = require("../config/upload");
+
+const { upload } = require("../config/upload");
+const {
+  uploadToAzure,
+  deleteFromAzure,
+} = require("../config/azureblob");
 
 const router = express.Router();
 
-/**
- * Utility helper to check for valid MongoDB ObjectId
- */
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 /**
@@ -21,6 +24,7 @@ router.use((req, res, next) => {
         "MongoDB is not connected. Please ensure MongoDB is running and your MONGODB_URI in .env is configured.",
     });
   }
+
   next();
 });
 
@@ -31,54 +35,110 @@ router.use((req, res, next) => {
 router.get("/", async (req, res) => {
   try {
     const tasks = await Task.find().sort({ createdAt: -1 });
-    res.status(200).json({ success: true, count: tasks.length, data: tasks });
+
+    res.status(200).json({
+      success: true,
+      count: tasks.length,
+      data: tasks,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("[Tasks] Get all tasks error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 
 /**
  * @route   POST /api/tasks
- * @desc    Create a new task (supports multipart/form-data for attachments)
+ * @desc    Create a new task with optional Azure Blob attachment
  */
 router.post("/", upload.single("file"), async (req, res) => {
+  let uploadedBlob = null;
+
   try {
     const { title, description, completed } = req.body;
 
+    /**
+     * Validate title
+     */
     if (!title || !title.trim()) {
-      if (req.file) {
-        removeUploadedFile(req.file.filename);
-      }
-      return res
-        .status(400)
-        .json({ success: false, message: "Title is required and cannot be empty" });
+      return res.status(400).json({
+        success: false,
+        message: "Title is required and cannot be empty",
+      });
     }
 
+    /**
+     * Prepare task data
+     */
     const taskPayload = {
       title: title.trim(),
+
       description: description ? description.trim() : "",
+
       completed:
         typeof completed === "string"
           ? completed === "true"
           : Boolean(completed),
     };
 
+    /**
+     * Upload file to Azure Blob Storage
+     */
     if (req.file) {
+      console.log("[Tasks] Uploading file to Azure Blob Storage...");
+
+      uploadedBlob = await uploadToAzure(req.file);
+
+      console.log("[Tasks] Azure upload successful:", uploadedBlob.blobName);
+
       taskPayload.file = {
-        url: `/uploads/${req.file.filename}`,
+        url: uploadedBlob.url,
+        blobName: uploadedBlob.blobName,
         originalName: req.file.originalname,
         mimeType: req.file.mimetype,
         size: req.file.size,
       };
     }
 
+    /**
+     * Save task in MongoDB
+     */
     const task = await Task.create(taskPayload);
-    res.status(201).json({ success: true, data: task });
+
+    res.status(201).json({
+      success: true,
+      data: task,
+    });
   } catch (error) {
-    if (req.file) {
-      removeUploadedFile(req.file.filename);
+    console.error("[Tasks] Create task error:", error);
+
+    /**
+     * If Azure upload succeeded but MongoDB failed,
+     * remove the newly uploaded Azure blob.
+     */
+    if (uploadedBlob && uploadedBlob.blobName) {
+      try {
+        await deleteFromAzure(uploadedBlob.blobName);
+        console.log(
+          "[Tasks] Cleaned up Azure blob after MongoDB failure:",
+          uploadedBlob.blobName
+        );
+      } catch (cleanupError) {
+        console.error(
+          "[Tasks] Failed to clean up Azure blob:",
+          cleanupError.message
+        );
+      }
     }
-    res.status(400).json({ success: false, message: error.message });
+
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 
@@ -91,52 +151,100 @@ router.get("/:id", async (req, res) => {
     const { id } = req.params;
 
     if (!isValidObjectId(id)) {
-      return res.status(400).json({ success: false, message: "Invalid task ID format" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid task ID format",
+      });
     }
 
     const task = await Task.findById(id);
+
     if (!task) {
-      return res.status(404).json({ success: false, message: "Task not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Task not found",
+      });
     }
 
-    res.status(200).json({ success: true, data: task });
+    res.status(200).json({
+      success: true,
+      data: task,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("[Tasks] Get single task error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 
 /**
  * @route   PATCH /api/tasks/:id
- * @desc    Update a task by ID (title, description, completed, file)
+ * @desc    Update a task by ID
+ *
+ * Supports:
+ * - title
+ * - description
+ * - completed
+ * - replace attachment
+ * - remove attachment
  */
 router.patch("/:id", upload.single("file"), async (req, res) => {
+  let newUploadedBlob = null;
+
   try {
     const { id } = req.params;
 
+    /**
+     * Validate ID
+     */
     if (!isValidObjectId(id)) {
-      if (req.file) removeUploadedFile(req.file.filename);
-      return res.status(400).json({ success: false, message: "Invalid task ID format" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid task ID format",
+      });
     }
 
+    /**
+     * Find existing task
+     */
     const existingTask = await Task.findById(id);
+
     if (!existingTask) {
-      if (req.file) removeUploadedFile(req.file.filename);
-      return res.status(404).json({ success: false, message: "Task not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Task not found",
+      });
     }
 
     const updates = {};
+
+    /**
+     * Update title
+     */
     if (req.body.title !== undefined) {
       if (!req.body.title.trim()) {
-        if (req.file) removeUploadedFile(req.file.filename);
-        return res
-          .status(400)
-          .json({ success: false, message: "Title cannot be empty" });
+        return res.status(400).json({
+          success: false,
+          message: "Title cannot be empty",
+        });
       }
+
       updates.title = req.body.title.trim();
     }
+
+    /**
+     * Update description
+     */
     if (req.body.description !== undefined) {
       updates.description = req.body.description.trim();
     }
+
+    /**
+     * Update completed status
+     */
     if (req.body.completed !== undefined) {
       updates.completed =
         typeof req.body.completed === "string"
@@ -144,75 +252,224 @@ router.patch("/:id", upload.single("file"), async (req, res) => {
           : Boolean(req.body.completed);
     }
 
-    // Handle file replacement or removal
+    /**
+     * ------------------------------------------------
+     * REPLACE EXISTING FILE
+     * ------------------------------------------------
+     */
     if (req.file) {
-      // Remove old file if it existed
-      if (existingTask.file && existingTask.file.url) {
-        removeUploadedFile(existingTask.file.url);
-      }
+      console.log("[Tasks] Uploading replacement file to Azure...");
+
+      /**
+       * Upload the new file first.
+       * This protects us from losing the old file if
+       * the new upload fails.
+       */
+      newUploadedBlob = await uploadToAzure(req.file);
+
+      console.log(
+        "[Tasks] New Azure blob uploaded:",
+        newUploadedBlob.blobName
+      );
+
       updates.file = {
-        url: `/uploads/${req.file.filename}`,
+        url: newUploadedBlob.url,
+        blobName: newUploadedBlob.blobName,
         originalName: req.file.originalname,
         mimeType: req.file.mimetype,
         size: req.file.size,
       };
-    } else if (
+    }
+
+    /**
+     * ------------------------------------------------
+     * REMOVE EXISTING FILE
+     * ------------------------------------------------
+     */
+    else if (
       req.body.removeFile === "true" ||
       req.body.removeFile === true
     ) {
-      if (existingTask.file && existingTask.file.url) {
-        removeUploadedFile(existingTask.file.url);
-      }
       updates.file = {
         url: null,
+        blobName: null,
         originalName: null,
         mimeType: null,
         size: null,
       };
     }
 
+    /**
+     * Update MongoDB
+     */
     const task = await Task.findByIdAndUpdate(id, updates, {
       new: true,
       runValidators: true,
     });
 
-    res.status(200).json({ success: true, data: task });
-  } catch (error) {
+    /**
+     * ------------------------------------------------
+     * DELETE OLD AZURE FILE
+     * ------------------------------------------------
+     *
+     * Only delete the old blob after MongoDB has
+     * successfully updated.
+     */
     if (req.file) {
-      removeUploadedFile(req.file.filename);
+      if (existingTask.file && existingTask.file.blobName) {
+        try {
+          await deleteFromAzure(existingTask.file.blobName);
+
+          console.log(
+            "[Tasks] Old Azure blob deleted:",
+            existingTask.file.blobName
+          );
+        } catch (deleteError) {
+          /**
+           * Don't fail the whole request because the
+           * database already contains the new file.
+           */
+          console.error(
+            "[Tasks] Failed to delete old Azure blob:",
+            deleteError.message
+          );
+        }
+      }
     }
-    res.status(400).json({ success: false, message: error.message });
+
+    /**
+     * ------------------------------------------------
+     * DELETE FILE WHEN removeFile=true
+     * ------------------------------------------------
+     */
+    if (
+      !req.file &&
+      (req.body.removeFile === "true" ||
+        req.body.removeFile === true)
+    ) {
+      if (existingTask.file && existingTask.file.blobName) {
+        try {
+          await deleteFromAzure(existingTask.file.blobName);
+
+          console.log(
+            "[Tasks] Azure blob removed:",
+            existingTask.file.blobName
+          );
+        } catch (deleteError) {
+          console.error(
+            "[Tasks] Failed to delete Azure blob:",
+            deleteError.message
+          );
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: task,
+    });
+  } catch (error) {
+    console.error("[Tasks] Update task error:", error);
+
+    /**
+     * If a new Azure blob was uploaded but something
+     * failed afterward, clean it up.
+     */
+    if (newUploadedBlob && newUploadedBlob.blobName) {
+      try {
+        await deleteFromAzure(newUploadedBlob.blobName);
+
+        console.log(
+          "[Tasks] Cleaned up new Azure blob after update failure:",
+          newUploadedBlob.blobName
+        );
+      } catch (cleanupError) {
+        console.error(
+          "[Tasks] Failed to clean up new Azure blob:",
+          cleanupError.message
+        );
+      }
+    }
+
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 
 /**
  * @route   DELETE /api/tasks/:id
- * @desc    Delete a task by ID and clean up any associated file
+ * @desc    Delete a task and its Azure Blob attachment
  */
 router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
+    /**
+     * Validate ID
+     */
     if (!isValidObjectId(id)) {
-      return res.status(400).json({ success: false, message: "Invalid task ID format" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid task ID format",
+      });
     }
 
+    /**
+     * Find task
+     */
     const task = await Task.findById(id);
+
     if (!task) {
-      return res.status(404).json({ success: false, message: "Task not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Task not found",
+      });
     }
 
-    // Remove associated file from disk if present
-    if (task.file && task.file.url) {
-      removeUploadedFile(task.file.url);
+    /**
+     * Delete Azure Blob attachment
+     */
+    if (task.file && task.file.blobName) {
+      try {
+        await deleteFromAzure(task.file.blobName);
+
+        console.log(
+          "[Tasks] Azure blob deleted:",
+          task.file.blobName
+        );
+      } catch (deleteError) {
+        console.error(
+          "[Tasks] Failed to delete Azure blob:",
+          deleteError.message
+        );
+
+        /**
+         * We continue deleting the MongoDB task.
+         * The blob deletion problem can be handled separately.
+         */
+      }
     }
 
+    /**
+     * Delete task from MongoDB
+     */
     await Task.findByIdAndDelete(id);
 
-    res.status(200).json({ success: true, message: "Task deleted successfully" });
+    res.status(200).json({
+      success: true,
+      message: "Task deleted successfully",
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("[Tasks] Delete task error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 
 module.exports = router;
+
