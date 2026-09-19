@@ -9,6 +9,18 @@ const { UPLOADS_DIR } = require("./config/upload");
 // Load environment variables
 dotenv.config();
 
+// Ensure Azure CLI is in PATH for AzureCliCredential (Windows default install location)
+const azCliPath = path.join(
+  process.env.ProgramFiles || "C:\\Program Files",
+  "Microsoft SDKs",
+  "Azure",
+  "CLI2",
+  "wbin"
+);
+if (!process.env.PATH.includes(azCliPath)) {
+  process.env.PATH = `${azCliPath};${process.env.PATH}`;
+}
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -22,7 +34,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve uploaded files statically
 app.use("/uploads", express.static(UPLOADS_DIR));
-
+const storageRoutes = require("./routes/storage");
 // API Health route
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", message: "Task Manager Express API is running" });
@@ -30,7 +42,7 @@ app.get("/api/health", (req, res) => {
 
 // Routes
 app.use("/api/tasks", taskRoutes);
-
+app.use("/api/storage", storageRoutes);
 // Multer and general error handling middleware
 app.use((err, req, res, next) => {
   if (err.name === "MulterError") {
